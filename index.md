@@ -1,4 +1,4 @@
-## Contatct Me
+## Contact Me
 
 You can contact me whenever you want: mehmetbayrambusiness@hotmail.com 
 
