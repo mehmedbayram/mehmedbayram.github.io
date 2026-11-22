@@ -32,12 +32,28 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r scripts/requirements.txt
-      - name: Fetch worldwide App Store data
+      - name: Prepare worldwide App Store snapshot
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
-        run: python scripts/update_appstore.py --output _site
+        run: |
+          python - <<'PYCODE'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import update_appstore as sync
+          if os.environ['GITHUB_EVENT_NAME'] == 'push':
+              # UI-only releases reuse the latest daily snapshot without querying 175 stores again.
+              snapshot = sync.request_json('https://mehmedbayram.github.io/data/appstore.json')
+              if snapshot.get('schemaVersion') != 2 or snapshot.get('scope') != 'worldwide' or len(snapshot.get('countries', [])) < 170:
+                  raise RuntimeError('Published worldwide snapshot is unavailable')
+              sync.write_site(Path.cwd(), Path('_site'), snapshot)
+              print('Published UI changes using the latest daily worldwide snapshot.')
+          else:
+              sys.argv = ['sync', '--output', '_site']
+              raise SystemExit(sync.main())
+          PYCODE
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
