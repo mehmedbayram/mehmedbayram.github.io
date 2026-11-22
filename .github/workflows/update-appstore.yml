@@ -1,0 +1,59 @@
+name: Update App Store data and publish
+
+on:
+  schedule:
+    - cron: '15 1 * * *' # 04:15 Europe/Istanbul
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - index.html
+      - app-ads.txt
+      - scripts/update_appstore.py
+      - scripts/requirements.txt
+      - .github/workflows/update-appstore.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appstore-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r scripts/requirements.txt
+      - name: Fetch worldwide App Store data
+        env:
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: python scripts/update_appstore.py --output _site
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@v4
