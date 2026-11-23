@@ -55,11 +55,12 @@ main,footer{position:relative;z-index:2}
 .menubar:hover i:last-child{width:28px}
 @media(max-width:767px){.header-inner{padding:0 16px}.header .theme-btn{display:none}.brand b{font-size:30px}.brand-mark{width:44px;height:44px}}
 /* menu */
-.menu{position:fixed;inset:0;z-index:1000;background:var(--theme-card);clip-path:circle(0 at calc(100% - 87px) 64px);transition:clip-path .8s cubic-bezier(.7,0,.2,1);display:flex;flex-direction:column;justify-content:center;padding:0 60px}
-.menu.open{clip-path:circle(150% at calc(100% - 87px) 64px)}
+.menu{position:fixed;inset:0;z-index:1000;background:var(--theme-card);clip-path:circle(0 at var(--menu-x, calc(100% - 87px)) var(--menu-y, 64px));transition:clip-path .8s cubic-bezier(.7,0,.2,1);display:flex;flex-direction:column;justify-content:center;padding:0 60px}
+.menu.open{clip-path:circle(150% at var(--menu-x, calc(100% - 87px)) var(--menu-y, 64px))}
 .menu a.l{font-weight:700;font-size:clamp(44px,7vw,100px);line-height:1;text-transform:uppercase;width:max-content;color:var(--theme-font-color);transition:color .3s}
 .menu a.l:hover{color:transparent;-webkit-text-stroke:2px var(--theme-secondary-color)}
 .menu .x{position:absolute;top:37px;right:60px;align-items:center}
+@media(max-width:767px){#menu .x{left:var(--menu-x);top:var(--menu-y);right:auto;transform:translate(-50%,-50%)}}
 .menu .say{margin-top:56px;color:var(--theme-light-text)}
 .menu .say a{color:var(--theme-secondary-color)}
 /* hero */
@@ -1062,6 +1063,15 @@ refreshApps();
 const menu=$('#menu'), opener=$('#mo');
 let menuTimer;
 let filmStartTimer;
+function syncMenuOrigin() {
+  const button = opener.getBoundingClientRect();
+  const panel = menu.getBoundingClientRect();
+  menu.style.setProperty('--menu-x', `${button.left + button.width / 2 - panel.left}px`);
+  menu.style.setProperty('--menu-y', `${button.top + button.height / 2 - panel.top}px`);
+}
+addEventListener('resize', () => {
+  if (!menu.hidden) syncMenuOrigin();
+});
 function setMenu(open) {
   clearTimeout(menuTimer);
   clearTimeout(filmStartTimer);
@@ -1070,6 +1080,9 @@ function setMenu(open) {
     renderMenuFilm();
     document.body.classList.add('menu-active');
     menu.hidden=false;menu.inert=false;document.body.style.overflow='hidden';
+    syncMenuOrigin();
+    // Resolve the collapsed clip before starting its opening transition.
+    getComputedStyle(menu).clipPath;
     $('#hd').inert=true;$('main').inert=true;$('footer').inert=true;
     requestAnimationFrame(() => {
       if (opener.getAttribute('aria-expanded') !== 'true') return;
