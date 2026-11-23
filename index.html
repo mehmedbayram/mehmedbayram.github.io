@@ -201,16 +201,16 @@ body{scrollbar-color:#414b5f #11141a}
 #published-apps{scroll-margin-block:120px 32px;transition:background .35s,border-color .35s}#published-apps:focus{outline:none}.career-stat.is-highlighted,#published-apps:focus-visible{border-color:var(--theme-secondary-color);background:#172b36;outline:2px solid var(--theme-secondary-color);outline-offset:5px}
 .hero h1 .natural-intelligence{position:relative}
 .phrase-original{position:absolute;inset:0;pointer-events:none}
-.phrase-original-tail{animation:phrase-swap .01s step-end 1.19s forwards}
-.phrase-final{visibility:hidden;animation:phrase-appear .01s step-start 1.2s forwards}
+.phrase-original-tail{animation:phrase-swap .01s step-end 1.79s forwards}
+.phrase-final{visibility:hidden;animation:phrase-appear .01s step-start 1.8s forwards}
 .word-original,.word-final{display:inline-block}
 @keyframes phrase-swap{to{visibility:hidden}}
 @keyframes phrase-appear{to{visibility:visible}}
 @media(max-width:767px){.hero h1 .natural-intelligence{text-align:center}}
-.word-original{position:relative;animation:word-fall .65s cubic-bezier(.55,.04,.9,.55) .55s forwards,word-fade .24s ease-out 1.2s forwards}
+.word-original{position:relative;animation:word-fall 1.25s cubic-bezier(.55,.04,.9,.55) .55s forwards,word-fade .45s ease-out 1.8s forwards}
 .word-original::after{content:"";position:absolute;left:-.06em;right:-.06em;top:50%;height:.075em;background:#ff3b30;transform:scaleX(0) rotate(-7deg);transform-origin:left;animation:word-cross .16s ease-out .32s forwards}
-.word-final{opacity:0;animation:word-impact .34s ease-out 1.2s forwards}
-.hero .uline path{animation-delay:1.6s}
+.word-final{opacity:0;animation:word-impact .34s ease-out 1.8s forwards}
+.hero .uline path{animation-delay:2.2s}
 @keyframes word-cross{to{transform:scaleX(1) rotate(-7deg)}}
 @keyframes word-fall{from{transform:translateY(0) rotate(0)}to{transform:translateY(var(--word-fall-distance,2.7em)) rotate(12deg)}}
 @keyframes word-fade{to{opacity:0}}
@@ -378,7 +378,7 @@ body.menu-active .service-items.shots-visible .app-shot-track{animation-play-sta
 <canvas id="trail" aria-hidden="true"></canvas>
 <canvas id="project-rain" aria-hidden="true"></canvas>
 <header class="header" id="hd"><div class="header-inner">
-<a href="#top" class="brand" aria-label="Mehmet Bayram, home"><div><b>Mehmet Bayram</b><small>iOS Developer</small></div></a>
+<a href="#top" class="brand" aria-label="Mehmet Bayram, home"><div><b>Mehmet Bayram</b><small>Software Developer</small></div></a>
 <div class="hr"><a class="theme-btn contact-btn" href="mailto:support@mehmedbayram.com">Get in Touch</a><button class="menubar" id="mo" aria-label="Open menu" aria-controls="menu" aria-expanded="false"><i></i><i></i></button></div>
 </div></header>
 <nav class="menu" id="menu" aria-label="Main menu" hidden inert>
