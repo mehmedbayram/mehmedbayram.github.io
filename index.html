@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mehmet Bayram — Apps & Support</title>
 <meta name="description" content="Discover apps by Mehmet Bayram for finance, everyday life, education and more. Explore the portfolio and contact app support.">
 <meta name="theme-color" content="#11141a">
@@ -362,6 +362,31 @@ body.menu-active .service-items.shots-visible .app-shot-track{animation-play-sta
  .app-meta .meta-full{display:none}
  .app-meta .meta-short{display:inline}
 }
+
+/* Extend the artwork to the viewport edges while keeping controls reachable. */
+.header{padding-top:calc(var(--header-top,34px) + env(safe-area-inset-top,0px))}
+.header.is-fixed{--header-top:16px}
+.header-inner,.menu{margin-inline:0}
+.header-inner{margin-left:env(safe-area-inset-left,0px);margin-right:env(safe-area-inset-right,0px)}
+.menu{border-inline:0;padding-left:max(20px,env(safe-area-inset-left,0px));padding-right:max(20px,env(safe-area-inset-right,0px))}
+@media(min-width:768px){
+ .menu{padding-left:max(60px,env(safe-area-inset-left,0px));padding-right:max(60px,env(safe-area-inset-right,0px))}
+}
+@media(max-width:767px){.header{--header-top:20px}}
+.menu #mc{left:var(--menu-x);top:var(--menu-y);right:auto;transform:translate(-50%,-50%)}
+.menu-tap-target{position:relative;display:grid;flex:none}
+.menu .menu-tap-target{position:absolute;left:var(--menu-x);top:var(--menu-y);transform:translate(-50%,-50%)}
+#menu .menu-tap-target #mc{position:static;transform:none}
+.menu-native-switch{position:absolute;inset:0;z-index:2;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+@media(orientation:portrait){
+ .menu-film{grid-template-rows:none;grid-template-columns:repeat(8,var(--film-icon-size));justify-content:space-between;align-content:stretch;--film-icon-size:clamp(16px,calc((100vw - 70px)/8),104px)}
+ .menu-film-row{min-height:0;align-items:flex-start;justify-content:center}
+ .menu-film-track,.menu-film-loop{flex-direction:column}
+ .menu-film-track{width:auto;height:max-content;animation-name:menu-film-scroll-vertical}
+ .menu-film-loop{padding-inline-end:0;padding-block-end:10px}
+}
+@keyframes menu-film-scroll-vertical{from{transform:translate3d(0,0,0)}to{transform:translate3d(0,-50%,0)}}
+@media(prefers-reduced-motion:reduce){.menu.film-running .menu-film-track{animation:none;will-change:auto}}
 </style>
 </head><body>
 <a class="skip-link" href="#apps">Skip to apps</a>
@@ -710,8 +735,11 @@ function renderApps() {
 }
 let menuFilmKey = '';
 function renderMenuFilm() {
-  const key = String(innerWidth);
-  if (menuFilmKey === key || $('#menu').classList.contains('open')) return;
+  const portrait = matchMedia('(orientation: portrait)').matches;
+  const crossAxis = portrait ? innerWidth : innerHeight;
+  const travelAxis = portrait ? innerHeight : innerWidth;
+  const key = `${portrait}:${crossAxis}:${travelAxis}`;
+  if (menuFilmKey === key) return;
   menuFilmKey = key;
   const rowCount = 8;
   const icons = [
@@ -721,8 +749,8 @@ function renderMenuFilm() {
   $('#menu-film').innerHTML = Array.from({ length: rowCount }, (_, row) => {
     const rowIcons = icons.filter((_, index) => index % rowCount === row);
     if (!rowIcons.length) return '';
-    const iconWidth = Math.min(104, Math.max(16, (innerHeight - 70) / rowCount));
-    const repetitions = Math.max(1, Math.ceil((innerWidth + 10) / (rowIcons.length * (iconWidth + 10))));
+    const iconWidth = Math.min(104, Math.max(16, (crossAxis - 70) / rowCount));
+    const repetitions = Math.max(1, Math.ceil((travelAxis + 10) / (rowIcons.length * (iconWidth + 10))));
     const group = rowIcons.join('').repeat(repetitions);
     const direction = row % 2 ? 'reverse' : 'normal';
     return `<div class="menu-film-row"><div class="menu-film-track" style="--film-duration:${29 + row * 4}s;--film-delay:-${row * 3 + 2}s;--film-direction:${direction}"><div class="menu-film-loop">${group}</div><div class="menu-film-loop">${group}</div></div></div>`;
@@ -1104,6 +1132,28 @@ function setMenu(open) {
 }
 opener.addEventListener('click',()=>setMenu(true));
 $('#mc').addEventListener('click',()=>setMenu(false));
+// A direct touch on the native Safari switch can produce a system haptic.
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+  for (const [button, opensMenu] of [[opener, true], [$('#mc'), false]]) {
+    const target = document.createElement('span');
+    target.className = 'menu-tap-target';
+    button.before(target);
+    target.append(button);
+    const nativeSwitch = document.createElement('input');
+    nativeSwitch.type = 'checkbox';
+    nativeSwitch.setAttribute('switch', '');
+    nativeSwitch.setAttribute('aria-hidden', 'true');
+    nativeSwitch.tabIndex = -1;
+    nativeSwitch.className = 'menu-native-switch';
+    nativeSwitch.addEventListener('change', () => {
+      setMenu(opensMenu);
+      nativeSwitch.checked = false;
+    });
+    target.append(nativeSwitch);
+  }
+}
+
 $$('.menu a').forEach(link=>link.addEventListener('click',()=>setMenu(false)));
 menu.addEventListener('keydown',event=>{
   if(event.key==='Escape'){event.preventDefault();setMenu(false);}
