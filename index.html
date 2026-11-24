@@ -213,6 +213,15 @@ body{scrollbar-color:#414b5f #11141a}
 .word-original::after{content:"";position:absolute;left:-.06em;right:-.06em;top:50%;height:.075em;background:#ff3b30;transform:scaleX(0) rotate(-7deg);transform-origin:left;animation:word-cross .16s ease-out .32s forwards}
 .word-final{color:var(--theme-secondary-color);opacity:0;animation:word-impact .34s ease-out 1.8s forwards}
 .hero .uline path{animation-delay:2.2s}
+@media(prefers-reduced-motion:no-preference){
+ .hero h1 .natural-intelligence{animation:hero-row-gelatine 1s ease 2.2s both}
+}
+@keyframes hero-row-gelatine{
+ 0%,100%{transform:scale(1)}
+ 25%{transform:scale(.9,1.1)}
+ 50%{transform:scale(1.1,.9)}
+ 75%{transform:scale(.95,1.05)}
+}
 @keyframes word-cross{to{transform:scaleX(1) rotate(-7deg)}}
 @keyframes word-fall{from{transform:translateY(0) rotate(0)}to{transform:translateY(var(--word-fall-distance,2.7em)) rotate(12deg)}}
 @keyframes word-fade{to{opacity:0}}
@@ -377,6 +386,8 @@ body.menu-active .service-items.shots-visible .app-shot-track{animation-play-sta
 .menu-tap-target{position:relative;display:grid;flex:none}
 .menu .menu-tap-target{position:absolute;left:var(--menu-x);top:var(--menu-y);transform:translate(-50%,-50%)}
 #menu .menu-tap-target #mc{position:static;transform:none}
+.menu-pointer-input :is(#mo,#mc,.menu-native-switch):focus{outline:none}
+:is(#mo,#mc,.menu-native-switch){-webkit-tap-highlight-color:transparent}
 .menu-native-switch{position:absolute;inset:0;z-index:2;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
 @media(orientation:portrait){
  .menu-film{grid-template-rows:none;grid-template-columns:repeat(8,var(--film-icon-size));justify-content:space-between;align-content:stretch;--film-icon-size:clamp(16px,calc((100vw - 70px)/8),104px)}
@@ -1090,6 +1101,14 @@ $('#refresh-apps').addEventListener('click', refreshApps);
 refreshApps();
 
 const menu=$('#menu'), opener=$('#mo');
+// Keep focus rings for keyboard navigation while suppressing touch-only rings.
+document.addEventListener('pointerdown', () => {
+  document.documentElement.classList.add('menu-pointer-input');
+}, {capture:true, passive:true});
+document.addEventListener('keydown', () => {
+  document.documentElement.classList.remove('menu-pointer-input');
+}, {capture:true});
+
 let menuTimer;
 let filmStartTimer;
 function syncMenuOrigin() {
