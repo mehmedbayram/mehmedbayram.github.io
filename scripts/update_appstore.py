@@ -1,5 +1,6 @@
 """Build the public App Store snapshot and GitHub Pages artifact."""
 import argparse
+import gzip
 import json
 import os
 import re
@@ -197,38 +198,66 @@ def combine_apps(countries, snapshots):
     return sorted(merged.values(), key=lambda app: (app.get('releaseDate', '9999'), app['trackId']))
 
 
-def read_chart(country, app_ids):
-    entries = []
-    try:
-        url = f'https://rss.marketingtools.apple.com/api/v2/{country}/apps/top-free/100/apps.json'
-        entries = [str(item['id']) for item in request_json(url, attempts=1, timeout=5)['feed']['results']]
-    except (RuntimeError, ValueError, KeyError, TypeError):
-        pass
-    if not entries:
-        try:
-            url = f'https://itunes.apple.com/{country}/rss/topfreeapplications/limit=100/json'
-            feed = request_json(url, attempts=1, timeout=5)['feed']
-            rows = feed['entry']
-            entries = [str(item['id']['attributes']['im:id']) for item in rows]
-        except (RuntimeError, ValueError, KeyError, TypeError):
-            return None
-    if not entries:
+def product_rank(html, app_id, country):
+    canonical = re.search(r'<link rel="canonical" href="([^"]+)"', html)
+    path = urlparse(canonical[1]).path if canonical else ''
+    if not path.startswith(f'/{country}/app/') or not path.endswith(f'/id{app_id}'):
         return None
-    return [(app_id, {'country': country, 'chart': 'free', 'rank': rank})
-            for rank, app_id in enumerate(entries, 1) if app_id in app_ids]
+    data = re.search(r'<script[^>]*id="serialized-server-data"[^>]*>(.*?)</script>', html, re.S)
+    if data is None:
+        return None
+    if '"chartPosition"' not in data[1]:
+        return {}
+
+    pending = [json.loads(data[1])]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(reversed(node))
+        elif isinstance(node, dict):
+            if node.get('$kind') == 'Badge' and node.get('type') == 'chartPosition':
+                position = str(node.get('content', {}).get('position', ''))
+                url = node.get('clickAction', {}).get('pageUrl', '')
+                if position.isascii() and position.isdecimal() and 'chart=top-free' in url:
+                    return {'country': country, 'chart': 'free', 'rank': int(position),
+                            'category': node.get('caption', '')}
+            pending.extend(reversed(list(node.values())))
+    return {}
 
 
-def chart_snapshot(countries, app_ids, fetched_at):
+def chart_snapshot(apps, countries):
+    jobs = [(str(app['trackId']), country)
+            for country in dict.fromkeys(['tr', 'us', *countries])
+            for app in apps if country in app['availableStores']]
+    deadline = time.monotonic() + 660
+
+    def read_product(job):
+        app_id, country = job
+        if time.monotonic() >= deadline:
+            return None
+        url = f'https://apps.apple.com/{country}/app/id{app_id}'
+        try:
+            request = Request(url, headers={'User-Agent': 'AppPortfolioSync/1.0',
+                                            'Accept': 'text/html', 'Accept-Encoding': 'gzip'})
+            with urlopen(request, timeout=6) as response:
+                content = response.read()
+                if response.headers.get('Content-Encoding') == 'gzip':
+                    content = gzip.decompress(content)
+            return product_rank(content.decode('utf-8'), app_id, country)
+        except (URLError, TimeoutError, OSError, ValueError):
+            return None
+
     matches = {}
     checked = 0
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        for result in pool.map(lambda country: read_chart(country, app_ids), countries):
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        for (app_id, country), result in zip(jobs, pool.map(read_product, jobs)):
             if result is not None:
                 checked += 1
-                for app_id, match in result:
-                    matches.setdefault(app_id, []).append(match)
-    print(f'Checked {checked}/{len(countries)} free App Store charts.', flush=True)
-    return {'fetchedAt': fetched_at, 'checked': checked, 'apps': matches}
+                if result:
+                    matches.setdefault(app_id, []).append(result)
+    print(f'Checked {checked}/{len(jobs)} App Store product pages.', flush=True)
+    return {'source': 'product-pages', 'fetchedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'checked': checked, 'total': len(jobs), 'apps': matches}
 
 
 def localized_snapshot(client, apps, previous, fetched_at):
@@ -288,7 +317,7 @@ def build_snapshot(client, cache=None, previous=None, refresh_metadata=False):
             'storeCounts': {country: sum(review['storefront'] == country for review in reviews) for country in countries},
         }
     fetched_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
-    charts = chart_snapshot(countries, {str(app['trackId']) for app in apps}, fetched_at)
+    charts = chart_snapshot(apps, countries)
     previous_metadata = (previous or {}).get('localizedMetadata', {})
     if refresh_metadata:
         previous_metadata = {app_id: {**record, 'checkedAt': None} for app_id, record in previous_metadata.items()}
