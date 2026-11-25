@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -24,6 +25,9 @@ def territory_country(code):
         raise RuntimeError('Unknown Apple territory: ' + str(code))
     return country.alpha_2.lower()
 API_ROOT = 'https://api.appstoreconnect.apple.com/v1'
+PUBLISHED_SNAPSHOT = 'https://mehmedbayram.github.io/data/appstore.json'
+METADATA_INTERVAL = 30 * 86400
+PUBLISHED_STATES = {'READY_FOR_DISTRIBUTION', 'READY_FOR_SALE', 'PREORDER_READY_FOR_SALE'}
 PUBLIC_APP_FIELDS = (
     'trackId', 'artistId', 'trackName', 'description', 'releaseDate',
     'artworkUrl100', 'artworkUrl512', 'primaryGenreName', 'minimumOsVersion',
@@ -101,19 +105,56 @@ class AppleClient:
             url = data.get('links', {}).get('next')
         return list(reviews.values())
 
+    def metadata_collection(self, path, **query):
+        url = 'https://api.appstoreconnect.apple.com' + path + '?' + urlencode(query)
+        visited = set()
+        while url:
+            parsed = urlparse(url)
+            if (parsed.scheme, parsed.netloc, parsed.path) != ('https', 'api.appstoreconnect.apple.com', path) or url in visited:
+                raise RuntimeError('Unexpected metadata pagination destination')
+            visited.add(url)
+            response = request_json(url, {'Authorization': self.authorization(f'GET {path}')}, attempts=2, timeout=8)
+            yield from response['data']
+            url = response.get('links', {}).get('next')
 
-def request_json(url, headers=None):
-    for attempt in range(4):
+    def localized_metadata(self, app_id):
+        locales = {}
+        resources = [
+            ('appStoreVersions', 'appStoreVersionLocalizations', 'description',
+             {'filter[platform]': 'IOS'}),
+            ('appInfos', 'appInfoLocalizations', 'name', {}),
+        ]
+        for collection, localizations, field, query in resources:
+            try:
+                entries = self.metadata_collection(f'/v1/apps/{app_id}/{collection}', **query)
+                published = next((entry for entry in entries if
+                                  PUBLISHED_STATES.intersection(entry['attributes'].get(key) for key in
+                                                               ('appStoreState', 'appVersionState', 'state'))), None)
+                if not published:
+                    continue
+                entries = self.metadata_collection(f"/v1/{collection}/{published['id']}/{localizations}")
+                for entry in entries:
+                    attrs = entry['attributes']
+                    value = attrs.get(field)
+                    if attrs['locale'] in ('tr', 'en-US') and isinstance(value, str) and value.strip():
+                        locales.setdefault(attrs['locale'], {})[field] = value.strip()
+            except (RuntimeError, ValueError, KeyError) as error:
+                print(f'Metadata {field} unavailable for {app_id}: {error}', flush=True)
+        return locales
+
+
+def request_json(url, headers=None, *, attempts=4, timeout=25):
+    for attempt in range(attempts):
         try:
             request = Request(url, headers={'Accept': 'application/json', 'User-Agent': 'AppPortfolioSync/1.0', **(headers or {})})
-            with urlopen(request, timeout=25) as response:
+            with urlopen(request, timeout=timeout) as response:
                 return json.load(response)
         except HTTPError as error:
-            if error.code not in (429, 500, 502, 503, 504) or attempt == 3:
+            if error.code not in (429, 500, 502, 503, 504) or attempt == attempts - 1:
                 # Credentials and response bodies must stay out of workflow logs.
                 raise RuntimeError(f'Apple request failed with HTTP {error.code}') from None
         except (URLError, TimeoutError):
-            if attempt == 3:
+            if attempt == attempts - 1:
                 raise RuntimeError('Apple request timed out after retries') from None
         time.sleep(2 ** (attempt + 1))
 
@@ -133,6 +174,13 @@ def combine_apps(countries, snapshots):
         for app in snapshot:
             app_id = str(app['trackId'])
             previous = merged.get(app_id, {})
+            descriptions = dict(previous.get('storeDescriptions', {}))
+            names = dict(previous.get('storeNames', {}))
+            description = app.get('description')
+            if country in ('tr', 'us') and isinstance(description, str) and description.strip():
+                descriptions[country] = description.strip()
+            if country in ('tr', 'us') and app.get('trackName'):
+                names[country] = app['trackName']
             ratings = {**previous.get('storeRatings', {}), country: {
                 'count': max(0, int(app.get('userRatingCount', 0))),
                 'average': float(app.get('averageUserRating', 0)),
@@ -141,13 +189,74 @@ def combine_apps(countries, snapshots):
             points = sum(value['count'] * value['average'] for value in ratings.values())
             merged[app_id] = {
                 **{key: value for key, value in app.items() if key in PUBLIC_APP_FIELDS},
+                'storeDescriptions': descriptions,
+                'storeNames': names,
                 'storefront': country, 'availableStores': list(ratings), 'storeRatings': ratings,
                 'userRatingCount': count, 'averageUserRating': points / count if count else 0,
             }
     return sorted(merged.values(), key=lambda app: (app.get('releaseDate', '9999'), app['trackId']))
 
 
-def build_snapshot(client, cache=None):
+def read_chart(country, app_ids):
+    entries = []
+    try:
+        url = f'https://rss.marketingtools.apple.com/api/v2/{country}/apps/top-free/100/apps.json'
+        entries = [str(item['id']) for item in request_json(url, attempts=1, timeout=5)['feed']['results']]
+    except (RuntimeError, ValueError, KeyError, TypeError):
+        pass
+    if not entries:
+        try:
+            url = f'https://itunes.apple.com/{country}/rss/topfreeapplications/limit=100/json'
+            feed = request_json(url, attempts=1, timeout=5)['feed']
+            rows = feed['entry']
+            entries = [str(item['id']['attributes']['im:id']) for item in rows]
+        except (RuntimeError, ValueError, KeyError, TypeError):
+            return None
+    if not entries:
+        return None
+    return [(app_id, {'country': country, 'chart': 'free', 'rank': rank})
+            for rank, app_id in enumerate(entries, 1) if app_id in app_ids]
+
+
+def chart_snapshot(countries, app_ids, fetched_at):
+    matches = {}
+    checked = 0
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for result in pool.map(lambda country: read_chart(country, app_ids), countries):
+            if result is not None:
+                checked += 1
+                for app_id, match in result:
+                    matches.setdefault(app_id, []).append(match)
+    print(f'Checked {checked}/{len(countries)} free App Store charts.', flush=True)
+    return {'fetchedAt': fetched_at, 'checked': checked, 'apps': matches}
+
+
+def localized_snapshot(client, apps, previous, fetched_at):
+    now = datetime.fromisoformat(fetched_at)
+    records = {}
+    deadline = time.monotonic() + 240
+    for app in apps:
+        app_id = str(app['trackId'])
+        old = previous.get(app_id, {})
+        try:
+            due = (now - datetime.fromisoformat(old['checkedAt'])).total_seconds() >= METADATA_INTERVAL
+        except (KeyError, TypeError, ValueError):
+            due = True
+        if not due or time.monotonic() >= deadline:
+            if old:
+                records[app_id] = old
+            continue
+        locales = client.localized_metadata(app_id)
+        records[app_id] = {'checkedAt': fetched_at, 'locales': {
+            locale: {
+                **{field: record for field, record in old.get('locales', {}).get(locale, {}).items()},
+                **{field: {'value': value, 'fetchedAt': fetched_at} for field, value in locales.get(locale, {}).items()},
+            } for locale in ('tr', 'en-US')
+        }}
+    return records
+
+
+def build_snapshot(client, cache=None, previous=None, refresh_metadata=False):
     countries = client.countries()
     snapshots = []
     # Stay below the public Search API's approximate 20 requests/minute limit.
@@ -179,9 +288,15 @@ def build_snapshot(client, cache=None):
             'storeCounts': {country: sum(review['storefront'] == country for review in reviews) for country in countries},
         }
     fetched_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    charts = chart_snapshot(countries, {str(app['trackId']) for app in apps}, fetched_at)
+    previous_metadata = (previous or {}).get('localizedMetadata', {})
+    if refresh_metadata:
+        previous_metadata = {app_id: {**record, 'checkedAt': None} for app_id, record in previous_metadata.items()}
+    metadata = localized_snapshot(client, apps, previous_metadata, fetched_at)
     return {
         'schemaVersion': 2, 'scope': 'worldwide', 'fetchedAt': fetched_at, 'countries': countries, 'apps': apps,
         'reviews': {'scope': 'worldwide', 'countries': countries, 'fetchedAt': fetched_at, 'apps': records},
+        'localizedMetadata': metadata, 'charts': charts,
     }
 
 
@@ -217,10 +332,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, default=Path('_site'))
     parser.add_argument('--lookup-cache', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--refresh-metadata', action='store_true')
     args = parser.parse_args()
     source = Path(__file__).resolve().parent.parent
     try:
-        snapshot = build_snapshot(AppleClient(), args.lookup_cache)
+        try:
+            previous = request_json(PUBLISHED_SNAPSHOT, attempts=1, timeout=12)
+        except (RuntimeError, ValueError):
+            previous = {}
+        snapshot = build_snapshot(AppleClient(), args.lookup_cache, previous, args.refresh_metadata)
         write_site(source, args.output, snapshot)
     except (RuntimeError, ValueError, KeyError) as error:
         print(str(error), file=sys.stderr)
