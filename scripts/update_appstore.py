@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -229,35 +230,62 @@ def chart_snapshot(apps, countries):
     jobs = [(str(app['trackId']), country)
             for country in dict.fromkeys(['tr', 'us', *countries])
             for app in apps if country in app['availableStores']]
-    deadline = time.monotonic() + 660
+    deadline = time.monotonic() + 150 * 60
+    request_lock = Lock()
+    next_request = 0.0
 
     def read_product(job):
+        nonlocal next_request
         app_id, country = job
-        if time.monotonic() >= deadline:
-            return None
         url = f'https://apps.apple.com/{country}/app/id{app_id}'
-        try:
-            request = Request(url, headers={'User-Agent': 'AppPortfolioSync/1.0',
-                                            'Accept': 'text/html', 'Accept-Encoding': 'gzip'})
-            with urlopen(request, timeout=6) as response:
-                content = response.read()
-                if response.headers.get('Content-Encoding') == 'gzip':
-                    content = gzip.decompress(content)
-            return product_rank(content.decode('utf-8'), app_id, country)
-        except (URLError, TimeoutError, OSError, ValueError):
-            return None
+        for attempt in range(3):
+            while True:
+                with request_lock:
+                    now = time.monotonic()
+                    if now >= deadline:
+                        return 'deferred', None
+                    delay = next_request - now
+                    if delay <= 0:
+                        next_request = now + 0.7
+                        break
+                time.sleep(min(delay, 5))
+            try:
+                request = Request(url, headers={'User-Agent': 'AppPortfolioSync/1.0',
+                                                'Accept': 'text/html', 'Accept-Encoding': 'gzip'})
+                with urlopen(request, timeout=8) as response:
+                    content = response.read()
+                    if response.headers.get('Content-Encoding') == 'gzip':
+                        content = gzip.decompress(content)
+                result = product_rank(content.decode('utf-8'), app_id, country)
+                return ('checked', result) if result is not None else ('unverified', None)
+            except HTTPError as error:
+                if error.code == 404:
+                    return 'unavailable', None
+                if error.code == 429:
+                    retry_after = error.headers.get('Retry-After', '')
+                    cooldown = max(30, int(retry_after)) if retry_after.isdecimal() else 60
+                    with request_lock:
+                        next_request = max(next_request, time.monotonic() + cooldown)
+                elif error.code < 500:
+                    return 'unverified', None
+            except (URLError, TimeoutError, OSError, EOFError, ValueError):
+                pass
+        return 'unverified', None
 
     matches = {}
-    checked = 0
-    with ThreadPoolExecutor(max_workers=20) as pool:
-        for (app_id, country), result in zip(jobs, pool.map(read_product, jobs)):
-            if result is not None:
-                checked += 1
-                if result:
-                    matches.setdefault(app_id, []).append(result)
-    print(f'Checked {checked}/{len(jobs)} App Store product pages.', flush=True)
-    return {'source': 'product-pages', 'fetchedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            'checked': checked, 'total': len(jobs), 'apps': matches}
+    checked = unavailable = 0
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for index, ((app_id, _), (status, result)) in enumerate(zip(jobs, pool.map(read_product, jobs)), 1):
+            checked += status == 'checked'
+            unavailable += status == 'unavailable'
+            if result:
+                matches.setdefault(app_id, []).append(result)
+            if index % 500 == 0:
+                print(f'Processed {index}/{len(jobs)} product pages ({checked} verified).', flush=True)
+    print(f'Checked {checked}/{len(jobs)} App Store product pages, {unavailable} unavailable.', flush=True)
+    return {'source': 'product-pages', 'scanVersion': 2,
+            'fetchedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            'checked': checked, 'unavailable': unavailable, 'total': len(jobs), 'apps': matches}
 
 
 def localized_snapshot(client, apps, previous, fetched_at):
