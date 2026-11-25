@@ -28,8 +28,7 @@ def territory_country(code):
     return country.alpha_2.lower()
 API_ROOT = 'https://api.appstoreconnect.apple.com/v1'
 PUBLISHED_SNAPSHOT = 'https://mehmedbayram.github.io/data/appstore.json'
-METADATA_INTERVAL = 30 * 86400
-PUBLISHED_STATES = {'READY_FOR_DISTRIBUTION', 'READY_FOR_SALE', 'PREORDER_READY_FOR_SALE'}
+PRODUCT_LOCALES = {'tr': 'tr', 'us': 'en-US'}
 PUBLIC_APP_FIELDS = (
     'trackId', 'artistId', 'trackName', 'description', 'releaseDate',
     'artworkUrl100', 'artworkUrl512', 'primaryGenreName', 'minimumOsVersion',
@@ -106,43 +105,6 @@ class AppleClient:
                 }
             url = data.get('links', {}).get('next')
         return list(reviews.values())
-
-    def metadata_collection(self, path, **query):
-        url = 'https://api.appstoreconnect.apple.com' + path + '?' + urlencode(query)
-        visited = set()
-        while url:
-            parsed = urlparse(url)
-            if (parsed.scheme, parsed.netloc, parsed.path) != ('https', 'api.appstoreconnect.apple.com', path) or url in visited:
-                raise RuntimeError('Unexpected metadata pagination destination')
-            visited.add(url)
-            response = request_json(url, {'Authorization': self.authorization(f'GET {path}')}, attempts=2, timeout=8)
-            yield from response['data']
-            url = response.get('links', {}).get('next')
-
-    def localized_metadata(self, app_id):
-        locales = {}
-        resources = [
-            ('appStoreVersions', 'appStoreVersionLocalizations', 'description',
-             {'filter[platform]': 'IOS'}),
-            ('appInfos', 'appInfoLocalizations', 'name', {}),
-        ]
-        for collection, localizations, field, query in resources:
-            try:
-                entries = self.metadata_collection(f'/v1/apps/{app_id}/{collection}', **query)
-                published = next((entry for entry in entries if
-                                  PUBLISHED_STATES.intersection(entry['attributes'].get(key) for key in
-                                                               ('appStoreState', 'appVersionState', 'state'))), None)
-                if not published:
-                    continue
-                entries = self.metadata_collection(f"/v1/{collection}/{published['id']}/{localizations}")
-                for entry in entries:
-                    attrs = entry['attributes']
-                    value = attrs.get(field)
-                    if attrs['locale'] in ('tr', 'en-US') and isinstance(value, str) and value.strip():
-                        locales.setdefault(attrs['locale'], {})[field] = value.strip()
-            except (RuntimeError, ValueError, KeyError) as error:
-                print(f'Metadata {field} unavailable for {app_id}: {error}', flush=True)
-        return locales
 
 
 def request_json(url, headers=None, *, attempts=4, timeout=25):
@@ -226,12 +188,34 @@ def product_rank(html, app_id, country):
     return {}
 
 
-CHART_STORES = ("tr", "us")
+def read_product_metadata(html, language):
+    lang = re.search(r'<html\b[^>]*\blang=["\']([^"\']+)', html, re.I)
+    if lang is None or lang[1].lower().split('-')[0] != language:
+        return {}
+    structured = re.search(
+        r'<script\b[^>]*\bid=(?:"software-application"|\'software-application\'|software-application(?=\s|>))[^>]*>(.*?)</script>',
+        html, re.S,
+    )
+    if structured is None:
+        return {}
+    try:
+        data = json.loads(structured[1])
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {field: data[field].strip() for field in ('name', 'description')
+            if isinstance(data.get(field), str) and data[field].strip()}
 
 
-def chart_snapshot(apps):
+def refresh_product_data(snapshot):
+    apps = snapshot['apps']
+    previous = snapshot.get('localizedMetadata', {}) if snapshot.get('metadataSource') == 'product-pages' else {}
+    records = {str(app['trackId']): dict(previous.get(str(app['trackId']), {}).get('locales', {})) for app in apps}
+    now = datetime.now(timezone.utc)
+
     jobs = [(str(app['trackId']), country)
-            for country in CHART_STORES
+            for country in PRODUCT_LOCALES
             for app in apps if country in app['availableStores']]
     deadline = time.monotonic() + 5 * 60
     request_lock = Lock()
@@ -240,7 +224,9 @@ def chart_snapshot(apps):
     def read_product(job):
         nonlocal next_request
         app_id, country = job
-        url = f'https://apps.apple.com/{country}/app/id{app_id}'
+        locale = PRODUCT_LOCALES[country]
+        language = locale.split('-')[0]
+        url = f'https://apps.apple.com/{country}/app/id{app_id}?l={language}'
         for attempt in range(3):
             while True:
                 with request_lock:
@@ -259,8 +245,12 @@ def chart_snapshot(apps):
                     content = response.read()
                     if response.headers.get('Content-Encoding') == 'gzip':
                         content = gzip.decompress(content)
-                result = product_rank(content.decode('utf-8'), app_id, country)
-                return ('checked', result) if result is not None else ('unverified', None)
+                html = content.decode('utf-8')
+                rank = product_rank(html, app_id, country)
+                if rank is None:
+                    return 'unverified', None
+                metadata = read_product_metadata(html, language)
+                return 'checked', (rank, metadata)
             except HTTPError as error:
                 if error.code == 404:
                     return 'unavailable', None
@@ -276,47 +266,31 @@ def chart_snapshot(apps):
         return 'unverified', None
 
     matches = {}
-    checked = unavailable = 0
+    checked = unavailable = updated = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for index, ((app_id, _), (status, result)) in enumerate(zip(jobs, pool.map(read_product, jobs)), 1):
+        for (app_id, country), (status, result) in zip(jobs, pool.map(read_product, jobs)):
             checked += status == 'checked'
             unavailable += status == 'unavailable'
-            if result:
-                matches.setdefault(app_id, []).append(result)
-            if index % 500 == 0:
-                print(f'Processed {index}/{len(jobs)} product pages ({checked} verified).', flush=True)
-    print(f'Checked {checked}/{len(jobs)} App Store product pages, {unavailable} unavailable.', flush=True)
-    return {'source': 'product-pages', 'scanVersion': 3, 'stores': list(CHART_STORES),
-            'fetchedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            'checked': checked, 'unavailable': unavailable, 'total': len(jobs), 'apps': matches}
+            if result is None:
+                continue
+            rank, metadata = result
+            if rank:
+                matches.setdefault(app_id, []).append(rank)
+            if metadata:
+                fields = records[app_id].setdefault(PRODUCT_LOCALES[country], {})
+                fields.update({key: {'value': value, 'fetchedAt': now.isoformat(timespec='seconds')}
+                               for key, value in metadata.items()})
+                updated += 1
+    print(f'Checked {checked}/{len(jobs)} App Store product pages, {unavailable} unavailable. '
+          f'Updated metadata from {updated} pages.', flush=True)
+    snapshot['charts'] = {'source': 'product-pages', 'scanVersion': 3, 'stores': list(PRODUCT_LOCALES),
+                          'fetchedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                          'checked': checked, 'unavailable': unavailable, 'total': len(jobs), 'apps': matches}
+    snapshot['metadataSource'] = 'product-pages'
+    snapshot['localizedMetadata'] = {app_id: {'locales': locales} for app_id, locales in records.items() if locales}
 
 
-def localized_snapshot(client, apps, previous, fetched_at):
-    now = datetime.fromisoformat(fetched_at)
-    records = {}
-    deadline = time.monotonic() + 240
-    for app in apps:
-        app_id = str(app['trackId'])
-        old = previous.get(app_id, {})
-        try:
-            due = (now - datetime.fromisoformat(old['checkedAt'])).total_seconds() >= METADATA_INTERVAL
-        except (KeyError, TypeError, ValueError):
-            due = True
-        if not due or time.monotonic() >= deadline:
-            if old:
-                records[app_id] = old
-            continue
-        locales = client.localized_metadata(app_id)
-        records[app_id] = {'checkedAt': fetched_at, 'locales': {
-            locale: {
-                **{field: record for field, record in old.get('locales', {}).get(locale, {}).items()},
-                **{field: {'value': value, 'fetchedAt': fetched_at} for field, value in locales.get(locale, {}).items()},
-            } for locale in ('tr', 'en-US')
-        }}
-    return records
-
-
-def build_snapshot(client, cache=None, previous=None, refresh_metadata=False):
+def build_snapshot(client, cache=None, previous=None):
     countries = client.countries()
     snapshots = []
     # Stay below the public Search API's approximate 20 requests/minute limit.
@@ -348,16 +322,15 @@ def build_snapshot(client, cache=None, previous=None, refresh_metadata=False):
             'storeCounts': {country: sum(review['storefront'] == country for review in reviews) for country in countries},
         }
     fetched_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
-    charts = chart_snapshot(apps)
-    previous_metadata = (previous or {}).get('localizedMetadata', {})
-    if refresh_metadata:
-        previous_metadata = {app_id: {**record, 'checkedAt': None} for app_id, record in previous_metadata.items()}
-    metadata = localized_snapshot(client, apps, previous_metadata, fetched_at)
-    return {
+    previous = previous or {}
+    snapshot = {
         'schemaVersion': 2, 'scope': 'worldwide', 'fetchedAt': fetched_at, 'countries': countries, 'apps': apps,
         'reviews': {'scope': 'worldwide', 'countries': countries, 'fetchedAt': fetched_at, 'apps': records},
-        'localizedMetadata': metadata, 'charts': charts,
+        'metadataSource': previous.get('metadataSource'),
+        'localizedMetadata': previous.get('localizedMetadata', {}),
     }
+    refresh_product_data(snapshot)
+    return snapshot
 
 
 def replace_payload(html, name, data):
@@ -392,7 +365,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, default=Path('_site'))
     parser.add_argument('--lookup-cache', type=Path, help=argparse.SUPPRESS)
-    parser.add_argument('--refresh-metadata', action='store_true')
     args = parser.parse_args()
     source = Path(__file__).resolve().parent.parent
     try:
@@ -400,7 +372,7 @@ def main():
             previous = request_json(PUBLISHED_SNAPSHOT, attempts=1, timeout=12)
         except (RuntimeError, ValueError):
             previous = {}
-        snapshot = build_snapshot(AppleClient(), args.lookup_cache, previous, args.refresh_metadata)
+        snapshot = build_snapshot(AppleClient(), args.lookup_cache, previous)
         write_site(source, args.output, snapshot)
     except (RuntimeError, ValueError, KeyError) as error:
         print(str(error), file=sys.stderr)
