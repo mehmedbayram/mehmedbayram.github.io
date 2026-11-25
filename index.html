@@ -615,7 +615,7 @@ function localizedApp(app, data) {
   const id = String(app.trackId);
   const fields = data.localizedMetadata?.[id]?.locales;
   const value = field => preferredLocales.map(locale => fields?.[locale]?.[field])
-    .find(record => typeof record?.value === 'string' && record.value.trim() && freshAppStoreDate(record.fetchedAt, 32))?.value;
+    .find(record => typeof record?.value === 'string' && record.value.trim() && freshAppStoreDate(record.fetchedAt, 2))?.value;
   const regionalName = descriptionStores.map(store => app.storeNames?.[store]).find(Boolean);
   const ranks = freshAppStoreDate(data.charts?.fetchedAt, 2) ? data.charts.apps?.[id] : undefined;
   return {...app, trackName:value('name') || regionalName || app.trackName,
