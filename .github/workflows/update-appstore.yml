@@ -2,7 +2,7 @@ name: Update App Store data and publish
 
 on:
   schedule:
-    - cron: '15 1 * * *' # 04:15 Europe/Istanbul
+    - cron: '30 8 * * *' # 11:30 Europe/Istanbul
   workflow_dispatch:
   push:
     branches: [master]
