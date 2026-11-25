@@ -588,7 +588,7 @@ function appScreenshotBackdrop(app) {
   const distance = 720 + (angleSeed >>> 17) % 420;
   return `<div class="app-shot-backdrop" aria-hidden="true"><div class="app-shot-plane" style="--shot-pitch:${pitch}deg;--shot-yaw:${yaw}deg;--shot-roll:${roll}deg;--shot-distance:${distance}px">${columns.join('')}</div></div>`;
 }
-const reviewDateFormatter = new Intl.DateTimeFormat('en-US', {dateStyle:'medium',timeZone:'UTC'});
+const reviewDateFormatter = new Intl.DateTimeFormat('en-US', {dateStyle:'long',timeZone:'UTC'});
 function reviewDate(date) {
   if (!date) return '';
   const published = new Date(date);
