@@ -23,7 +23,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,11 +48,14 @@ jobs:
               snapshot = sync.request_json('https://mehmedbayram.github.io/data/appstore.json')
               if snapshot.get('schemaVersion') != 2 or snapshot.get('scope') != 'worldwide' or len(snapshot.get('countries', [])) < 170:
                   raise RuntimeError('Published worldwide snapshot is unavailable')
-              sync.write_site(Path.cwd(), Path('_site'), snapshot)
-              print('Published UI changes using the latest daily worldwide snapshot.')
-          else:
-              sys.argv = ['sync', '--output', '_site']
-              raise SystemExit(sync.main())
+              if 'charts' in snapshot and 'localizedMetadata' in snapshot:
+                  sync.write_site(Path.cwd(), Path('_site'), snapshot)
+                  print('Published UI changes using the latest daily worldwide snapshot.')
+                  raise SystemExit(0)
+          sys.argv = ['sync', '--output', '_site']
+          if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch':
+              sys.argv.append('--refresh-metadata')
+          raise SystemExit(sync.main())
           PYCODE
       - uses: actions/upload-pages-artifact@v4
         with:
