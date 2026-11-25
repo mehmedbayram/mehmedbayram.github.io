@@ -23,7 +23,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,7 +48,7 @@ jobs:
               snapshot = sync.request_json('https://mehmedbayram.github.io/data/appstore.json')
               if snapshot.get('schemaVersion') != 2 or snapshot.get('scope') != 'worldwide' or len(snapshot.get('countries', [])) < 170:
                   raise RuntimeError('Published worldwide snapshot is unavailable')
-              if snapshot.get('charts', {}).get('source') != 'product-pages':
+              if snapshot.get('charts', {}).get('scanVersion') != 2:
                   snapshot['charts'] = sync.chart_snapshot(snapshot['apps'], snapshot['countries'])
               sync.write_site(Path.cwd(), Path('_site'), snapshot)
               print('Published using the latest daily worldwide snapshot.')
