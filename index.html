@@ -402,6 +402,7 @@ body.menu-active .service-items.shots-visible .app-shot-track{animation-play-sta
 @media(prefers-reduced-motion:reduce){.menu.film-running .menu-film-track{animation:none;will-change:auto}}
 .menu a.menu-store-link{display:inline-flex;align-items:center;gap:.2em;white-space:nowrap}
 .menu-store-arrow{width:.55em;height:.55em;flex:none}
+.review-byline{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;margin-top:auto}.review-byline cite{min-width:0;margin-top:0}.review-byline time{flex:none;font-size:11px;color:var(--theme-light-text)}
  .app-chart-ranks{position:relative;margin-top:1rem;overflow:hidden;font-size:.875rem;color:var(--theme-font-color);font-variant-numeric:tabular-nums}
 .app-chart-track{display:flex;width:max-content;margin-inline:auto}
 .app-chart-ranks ul{display:flex;flex:none;align-items:center;gap:.55rem;width:max-content;margin:0;padding:0;list-style:none;white-space:nowrap}
@@ -587,10 +588,18 @@ function appScreenshotBackdrop(app) {
   const distance = 720 + (angleSeed >>> 17) % 420;
   return `<div class="app-shot-backdrop" aria-hidden="true"><div class="app-shot-plane" style="--shot-pitch:${pitch}deg;--shot-yaw:${yaw}deg;--shot-roll:${roll}deg;--shot-distance:${distance}px">${columns.join('')}</div></div>`;
 }
+const reviewDateFormatter = new Intl.DateTimeFormat('en-US', {dateStyle:'medium',timeZone:'UTC'});
+function reviewDate(date) {
+  if (!date) return '';
+  const published = new Date(date);
+  return Number.isFinite(published.getTime())
+    ? `<time datetime="${published.toISOString()}">${reviewDateFormatter.format(published)}</time>`
+    : '';
+}
 function reviewSection(app) {
   const reviews=(reviewData.apps[String(app.trackId)]?.reviews || []).filter(review=>[4,5].includes(review.rating));
   if(!reviews.length)return '';
-  const quotes=reviews.map(review=>`<blockquote class="review-quote"><div class="review-stars" aria-label="${review.rating} out of 5 stars">${Array.from({length:review.rating},()=>icon('star',12)).join('')}</div>${review.title?`<strong>${escapeHTML(review.title)}</strong>`:''}<p>${escapeHTML(review.body)}${review.translationNote ? `<small class="review-translation"> (${escapeHTML(review.translationNote)})</small>` : ''}</p><cite>${escapeHTML(review.author)}</cite></blockquote>`).join('');
+  const quotes=reviews.map(review=>`<blockquote class="review-quote"><div class="review-stars" aria-label="${review.rating} out of 5 stars">${Array.from({length:review.rating},()=>icon('star',12)).join('')}</div>${review.title?`<strong>${escapeHTML(review.title)}</strong>`:''}<p>${escapeHTML(review.body)}${review.translationNote ? `<small class="review-translation"> (${escapeHTML(review.translationNote)})</small>` : ''}</p><div class="review-byline"><cite>${escapeHTML(review.author)}</cite>${reviewDate(review.date)}</div></blockquote>`).join('');
   return `<section class="app-reviews" aria-label="${escapeHTML(app.trackName)} user reviews"><div class="review-window" tabindex="0" aria-label="Scroll reviews using a mouse wheel, touch or arrow keys"><div class="review-track"><div class="review-group">${quotes}</div>${reviews.length>2?`<div class="review-group" aria-hidden="true" inert>${quotes}</div>`:''}</div></div></section>`;
 }
 const bundledStoreDescriptions = JSON.parse(document.querySelector('#store-descriptions').textContent);
@@ -615,7 +624,7 @@ function localizedApp(app, data) {
 function chartRanks(app) {
   if (!Array.isArray(app.ranks)) return '';
   const matches = app.ranks.filter(({country,chart,rank}) =>
-    /^[a-z]{2}$/.test(country) && chart === 'free' && Number.isInteger(rank) && rank > 0)
+    (country === 'tr' || country === 'us') && chart === 'free' && Number.isInteger(rank) && rank > 0)
     .sort((a,b) => a.rank - b.rank || a.country.localeCompare(b.country));
   if (!matches.length) return '';
   const label = siteLanguage === 'tr' ? 'App Store sıralamaları' : 'App Store chart rankings';
