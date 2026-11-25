@@ -226,11 +226,14 @@ def product_rank(html, app_id, country):
     return {}
 
 
-def chart_snapshot(apps, countries):
+CHART_STORES = ("tr", "us")
+
+
+def chart_snapshot(apps):
     jobs = [(str(app['trackId']), country)
-            for country in dict.fromkeys(['tr', 'us', *countries])
+            for country in CHART_STORES
             for app in apps if country in app['availableStores']]
-    deadline = time.monotonic() + 150 * 60
+    deadline = time.monotonic() + 5 * 60
     request_lock = Lock()
     next_request = 0.0
 
@@ -283,7 +286,7 @@ def chart_snapshot(apps, countries):
             if index % 500 == 0:
                 print(f'Processed {index}/{len(jobs)} product pages ({checked} verified).', flush=True)
     print(f'Checked {checked}/{len(jobs)} App Store product pages, {unavailable} unavailable.', flush=True)
-    return {'source': 'product-pages', 'scanVersion': 2,
+    return {'source': 'product-pages', 'scanVersion': 3, 'stores': list(CHART_STORES),
             'fetchedAt': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'checked': checked, 'unavailable': unavailable, 'total': len(jobs), 'apps': matches}
 
@@ -345,7 +348,7 @@ def build_snapshot(client, cache=None, previous=None, refresh_metadata=False):
             'storeCounts': {country: sum(review['storefront'] == country for review in reviews) for country in countries},
         }
     fetched_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
-    charts = chart_snapshot(apps, countries)
+    charts = chart_snapshot(apps)
     previous_metadata = (previous or {}).get('localizedMetadata', {})
     if refresh_metadata:
         previous_metadata = {app_id: {**record, 'checkedAt': None} for app_id, record in previous_metadata.items()}
