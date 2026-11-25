@@ -48,14 +48,11 @@ jobs:
               snapshot = sync.request_json('https://mehmedbayram.github.io/data/appstore.json')
               if snapshot.get('schemaVersion') != 2 or snapshot.get('scope') != 'worldwide' or len(snapshot.get('countries', [])) < 170:
                   raise RuntimeError('Published worldwide snapshot is unavailable')
-              if snapshot.get('charts', {}).get('scanVersion') != 3:
-                  snapshot['charts'] = sync.chart_snapshot(snapshot['apps'])
-              sync.write_site(Path.cwd(), Path('_site'), snapshot)
-              print('Published using the latest daily worldwide snapshot.')
-              raise SystemExit(0)
+              if snapshot.get('charts', {}).get('scanVersion') == 3 and snapshot.get('metadataSource') == 'product-pages':
+                  sync.write_site(Path.cwd(), Path('_site'), snapshot)
+                  print('Published using the latest daily worldwide snapshot.')
+                  raise SystemExit(0)
           sys.argv = ['sync', '--output', '_site']
-          if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch':
-              sys.argv.append('--refresh-metadata')
           raise SystemExit(sync.main())
           PYCODE
       - uses: actions/upload-pages-artifact@v4
