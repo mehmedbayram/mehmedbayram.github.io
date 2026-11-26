@@ -9,6 +9,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from threading import Lock
 from urllib.error import HTTPError, URLError
@@ -342,12 +343,41 @@ def replace_payload(html, name, data):
     return result
 
 
+def render_app_directory(html, apps, metadata):
+    turkish = '<html lang="tr">' in html
+    preferred = 'tr' if turkish else 'us'
+    locale = 'tr' if turkish else 'en-US'
+    items = []
+    for app in apps:
+        app_id = str(app['trackId'])
+        if app.get('artistId') != DEVELOPER_ID or not re.fullmatch(r'[0-9]+', app_id):
+            continue
+        fields = metadata.get(app_id, {}).get('locales', {}).get(locale, {})
+        name = fields.get('name', {}).get('value') or app.get('storeNames', {}).get(preferred) or app['trackName']
+        description = (fields.get('description', {}).get('value') or
+                       app.get('storeDescriptions', {}).get(preferred) or app.get('description', ''))
+        words = ' '.join(description.split())
+        if len(words) > 180:
+            words = words[:180].rsplit(' ', 1)[0] + '…'
+        stores = app.get('availableStores', [])
+        store = preferred if not stores or preferred in stores else app.get('storefront', preferred)
+        if not re.fullmatch(r'[a-z]{2}', store):
+            store = preferred
+        url = f'https://apps.apple.com/{store}/app/id{app_id}' + ('?l=tr' if turkish else '')
+        detail = f' <span>{escape(words)}</span>' if words else ''
+        items.append(f'<li><a href="{url}">{escape(name)}</a>{detail}</li>')
+    directory = '<ul class="app-directory">' + '\n'.join(items) + '</ul>'
+    return re.sub(r'(<!-- app-directory:start -->).*?(<!-- app-directory:end -->)',
+                  lambda match: match[1] + directory + match[2], html, count=1, flags=re.S)
+
+
 def write_site(source, output, snapshot):
     if not snapshot.get('apps') or not snapshot.get('reviews', {}).get('apps'):
         raise RuntimeError('Refusing to publish an empty snapshot')
     html = (source / 'index.html').read_text()
     html = replace_payload(html, 'appstore-seed', snapshot['apps'])
     html = replace_payload(html, 'appstore-reviews', snapshot['reviews'])
+    html = render_app_directory(html, snapshot['apps'], snapshot.get('localizedMetadata', {}))
     if 'BEGIN PRIVATE KEY' in html or 'api.appstoreconnect.apple.com' in html:
         raise RuntimeError('Unexpected credential or private API reference in public HTML')
     output.mkdir(parents=True, exist_ok=True)
@@ -355,6 +385,12 @@ def write_site(source, output, snapshot):
     encoded = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
     (output / 'data/appstore.json').write_text(encoded)
     (output / 'index.html').write_text(html)
+    canonical = 'https://mehmedbayram.github.io/'
+    (output / 'robots.txt').write_text(f'User-agent: *\nAllow: /\nSitemap: {canonical}sitemap.xml\n')
+    (output / 'sitemap.xml').write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>{canonical}</loc></url></urlset>\n'
+    )
     (output / '.nojekyll').touch()
     ads = source / 'app-ads.txt'
     if ads.is_file():
